@@ -1,0 +1,442 @@
+---------------------------------------OLIST CUSTOMERS RFM ANALYSYS
+
+WITH 
+--Compute for F & M & R
+t2 AS ( SELECT c.customer_unique_id as customer_id,
+DATE_DIFF(CAST('2019-01-01'as DATE), MAX(CAST(o.order_purchase_timestamp as DATE )), DAY) as recency,
+COUNT(Distinct o.order_id) as frequency,
+ROUND(SUM( oi.order_item_id * (oi.price+oi.freight_value)))  as monetary
+
+FROM `tc-da-1.olist_db.olist_order_items_dataset` oi
+JOIN `olist_db.olist_orders_dataset` o
+USING (order_id)
+JOIN`olist_db.olist_customesr_dataset` c
+Using(customer_id)
+
+GROUP BY 1  
+),
+t3 AS (
+SELECT 
+    a.*,
+    --All percentiles for MONETARY
+    b.percentiles[offset(25)] AS m25, 
+    b.percentiles[offset(50)] AS m50,
+    b.percentiles[offset(75)] AS m75, 
+    b.percentiles[offset(100)] AS m100,    
+    --All percentiles for FREQUENCY
+    c.percentiles[offset(92507)] AS f92507, -- one time buyers 
+    c.percentiles[offset(95180)] AS f95180, -- two times buyers
+    c.percentiles[offset(95372)] AS f95372, -- 3 times buyers
+    c.percentiles[offset(95420)] AS f95420,  -- more than 3 times buyers  
+        --All percentiles for RECENCY
+    d.percentiles[offset(25)] AS r25, 
+    d.percentiles[offset(50)] AS r50,
+    d.percentiles[offset(75)] AS r75,
+    d.percentiles[offset(100)] AS r100
+FROM 
+    t2 a,
+    (SELECT APPROX_QUANTILES(monetary, 100) percentiles FROM
+    t2) b,
+    (SELECT APPROX_QUANTILES(frequency, 95420) percentiles FROM
+    t2) c,
+    (SELECT APPROX_QUANTILES(recency, 100) percentiles FROM
+    t2) d
+),
+t4 AS (
+    SELECT *, 
+    CAST(ROUND((f_score + m_score) / 2, 0) AS INT64) AS fm_score
+    FROM (
+        SELECT *, 
+        CASE WHEN monetary <= m25 THEN 1
+            WHEN monetary <= m50 AND monetary > m25 THEN 2 
+            WHEN monetary <= m75 AND monetary > m50 THEN 3 
+            WHEN monetary <= m100 AND monetary > m75 THEN 4
+        END AS m_score,
+        CASE WHEN frequency <= f92507 THEN 1
+            WHEN frequency <= f95180 AND frequency > f92507 THEN 2 
+            WHEN frequency <= f95372 AND frequency > f95180 THEN 3 
+            WHEN frequency <= f95420 AND frequency > f95372 THEN 4 
+         END AS f_score,
+        --Recency scoring is reversed
+        CASE WHEN recency <= r25 THEN 4
+            WHEN recency <= r50 AND recency > r25 THEN 3 
+            WHEN recency <= r75 AND recency > r50 THEN 2 
+            WHEN recency <= r100 AND recency > r75 THEN 1
+        END AS r_score,
+        FROM t3
+        )
+),
+t5 AS (
+    SELECT 
+        customer_id, 
+        recency,
+        frequency, 
+        monetary,
+        r_score,
+        f_score,
+        m_score,
+        fm_score,
+        CASE WHEN (r_score = 4 AND fm_score = 4) 
+            OR (r_score = 3 AND fm_score = 4) 
+            OR (r_score = 4 AND fm_score = 3) 
+            OR (r_score = 3 AND fm_score = 3)
+        THEN ' Best Customers'
+        WHEN (r_score = 4 AND fm_score =2) 
+            OR(r_score = 2 AND fm_score = 4)
+            OR (r_score = 2 AND fm_score = 3)
+            OR (r_score = 1 AND fm_score = 4)
+        THEN 'Valuable Customers'
+        WHEN (r_score = 4 AND fm_score = 1) 
+            OR(r_score = 3 AND fm_score = 1)
+        THEN 'Recent Customers'
+        WHEN (r_score = 3 AND fm_score = 2)
+        THEN 'Promising'
+        WHEN (r_score = 2 AND fm_score = 2)
+            OR(r_score = 2 AND fm_score = 1)
+            OR (r_score = 1 AND fm_score = 3) 
+        THEN 'Hibernating'
+        WHEN r_score = 1 AND fm_score = 2 
+            OR r_score = 1 AND fm_score = 1 
+        THEN 'Lost'
+        END AS rfm_segment 
+    FROM t4
+)
+SELECT* FROM t5
+
+ORDER BY t5.fm_score desc, r_score desc
+
+
+
+
+
+
+
+
+
+
+
+
+
+--------------- 10 MOST PROFITABLE SELLER-CITIES' AVERAGE REVIEW SCORE BY DIFFERENT RFM SEGMENT
+
+
+WITH 
+--Compute for F & M & R
+t2 AS ( SELECT c.customer_unique_id as customer_id,
+DATE_DIFF(CAST('2019-01-01'as DATE), MAX(CAST(o.order_purchase_timestamp as DATE )), DAY) as recency,
+COUNT(Distinct o.order_id) as frequency,
+ROUND(SUM( oi.order_item_id * (oi.price+oi.freight_value)))  as monetary
+
+FROM `tc-da-1.olist_db.olist_order_items_dataset` oi
+JOIN `olist_db.olist_orders_dataset` o
+USING (order_id)
+JOIN`olist_db.olist_customesr_dataset` c
+Using(customer_id)
+
+GROUP BY 1  
+),
+t3 AS (
+SELECT 
+    a.*,
+    --All percentiles for MONETARY
+    b.percentiles[offset(25)] AS m25, 
+    b.percentiles[offset(50)] AS m50,
+    b.percentiles[offset(75)] AS m75, 
+    b.percentiles[offset(100)] AS m100,    
+    --All percentiles for FREQUENCY
+    c.percentiles[offset(92507)] AS f92507, 
+    c.percentiles[offset(95180)] AS f95180,
+    c.percentiles[offset(95372)] AS f95372,
+    c.percentiles[offset(95420)] AS f95420,    
+        --All percentiles for RECENCY
+    d.percentiles[offset(25)] AS r25, 
+    d.percentiles[offset(50)] AS r50,
+    d.percentiles[offset(75)] AS r75,
+    d.percentiles[offset(100)] AS r100
+FROM 
+    t2 a,
+    (SELECT APPROX_QUANTILES(monetary, 100) percentiles FROM
+    t2) b,
+    (SELECT APPROX_QUANTILES(frequency, 95420) percentiles FROM
+    t2) c,
+    (SELECT APPROX_QUANTILES(recency, 100) percentiles FROM
+    t2) d
+),
+t4 AS (
+    SELECT *, 
+    CAST(ROUND((f_score + m_score) / 2, 0) AS INT64) AS fm_score
+    FROM (
+        SELECT *, 
+        CASE WHEN monetary <= m25 THEN 1
+            WHEN monetary <= m50 AND monetary > m25 THEN 2 
+            WHEN monetary <= m75 AND monetary > m50 THEN 3 
+            WHEN monetary <= m100 AND monetary > m75 THEN 4
+        END AS m_score,
+        CASE WHEN frequency <= f92507 THEN 1
+            WHEN frequency <= f95180 AND frequency > f92507 THEN 2 
+            WHEN frequency <= f95372 AND frequency > f95180 THEN 3 
+            WHEN frequency <= f95420 AND frequency > f95372 THEN 4 
+         END AS f_score,
+        --Recency scoring is reversed
+        CASE WHEN recency <= r25 THEN 4
+            WHEN recency <= r50 AND recency > r25 THEN 3 
+            WHEN recency <= r75 AND recency > r50 THEN 2 
+            WHEN recency <= r100 AND recency > r75 THEN 1
+        END AS r_score,
+        FROM t3
+        )
+),
+t5 AS (
+    SELECT 
+        customer_id, 
+        recency,
+        frequency, 
+        monetary,
+        r_score,
+        f_score,
+        m_score,
+        fm_score,
+        CASE WHEN (r_score = 4 AND fm_score = 4) 
+            OR (r_score = 3 AND fm_score = 4) 
+            OR (r_score = 4 AND fm_score = 3) 
+            OR (r_score = 3 AND fm_score = 3)
+        THEN '1 Best Customers'
+        WHEN (r_score = 4 AND fm_score =2) 
+            OR(r_score = 2 AND fm_score = 4)
+            OR (r_score = 2 AND fm_score = 3)
+            OR (r_score = 1 AND fm_score = 4)
+        THEN '2 Valuable Customers'
+        WHEN (r_score = 4 AND fm_score = 1) 
+            OR(r_score = 3 AND fm_score = 1)
+        THEN '3 Recent Customers'
+        WHEN (r_score = 3 AND fm_score = 2)
+        THEN '4 Promising'
+        WHEN (r_score = 2 AND fm_score = 2)
+            OR(r_score = 2 AND fm_score = 1)
+            OR (r_score = 1 AND fm_score = 3) 
+        THEN '5 Hibernating'
+        WHEN r_score = 1 AND fm_score = 2 
+            OR r_score = 1 AND fm_score = 1 
+        THEN '6 Lost'
+        END AS rfm_segment 
+    FROM t4
+)
+SELECT 
+rfm_segment ,
+seller_city,
+AVG(review_score) avg_review_score
+ FROM t5
+Join `olist_db.olist_customesr_dataset` a
+On t5.customer_id=a.customer_unique_id
+Join `olist_db.olist_orders_dataset` b
+ON a.customer_id=b.customer_id
+Join `olist_db.olist_order_reviews_dataset`
+Using (order_id)
+JOIN `olist_db.olist_order_items_dataset`
+USING(order_id)
+JOIN `olist_db.olist_sellers_dataset`
+USING(seller_id)
+Where seller_city in ('sao paulo','ibitinga','curitiba','rio de janeiro','guarulhos','ribeirao preto','itaquaquecetuba','santo andre','belo horizonte','guariba')
+Group by 1,2
+Order by 1,3
+
+
+
+
+
+
+
+
+
+
+
+--------------------------------------------------SELLERS PARETO CHART
+
+
+
+
+WITH category_sales AS (
+ SELECT
+ seller_city,
+ SUM(price + freight_value) AS revenue
+FROM
+ `tc-da-1.olist_db.olist_order_items_dataset` items
+INNER JOIN
+ `tc-da-1.olist_db.olist_sellers_dataset` sellers
+ON
+ items.seller_id = sellers.seller_id
+GROUP BY 1
+ORDER BY revenue DESC
+)
+SELECT
+ seller_city,
+ revenue,
+ running_total,
+ total,
+ running_total / total AS percent_of_total
+FROM
+ (
+ SELECT
+   seller_city,
+   revenue,
+   SUM(revenue) OVER (ORDER BY revenue DESC) AS running_total,
+   SUM(revenue) OVER() AS total
+ FROM
+   category_sales)
+ORDER BY revenue DESC;
+
+
+
+
+
+
+
+
+
+------------------------------- OLIST NUMBER OF REVIEWS BY REVIEW SCORE AND AVERAGE MESSAGE LENGTH
+
+
+SELECT review_score, 
+count(1)  review_number, 
+Round(avg(review_comment_message_length)) average_message_length
+ FROM `tc-da-1.olist_db.olist_order_reviews_dataset` 
+ Group by 1
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+------------------------------- NUMBER OF NEGATIVE  (REVIEW_SCORE = 1,2) REVIEWS GROUPED BE SELLER CITY
+ 
+SELECT  
+seller_state,
+seller_city,
+count(1)  reviews_number
+ FROM `tc-da-1.olist_db.olist_order_reviews_dataset` 
+ Join `olist_db.olist_order_items_dataset`
+ Using(order_id)
+ Join `olist_db.olist_sellers_dataset`
+ Using(seller_id) 
+ WHERE review_score=1 or review_score=2 
+ Group by 1,2
+ Order by 3 desc
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ ----------------- TABLE SHOWING REVENUE GROUPED BY SELLER, SELLER'S CITY, AND BY THE PRODUCT CATEGORY NAME.
+ 
+ 
+ -- Stating conditions for the review_score, seller_id or seller_city in WHERE clause this code is used by me 
+ -- to extract revenue of different sellers wich received negative or positive reviews. 
+ 
+ 
+ 
+ SELECT  
+ string_field_1 AS product_category_name,
+  seller_city, 
+  seller_id,
+  SUM(price + freight_value) AS revenue
+ FROM `tc-da-1.olist_db.olist_order_reviews_dataset` review
+ Join `olist_db.olist_order_items_dataset` items
+ Using(order_id)
+ Join `olist_db.olist_sellers_dataset` seller
+ Using(seller_id) 
+ JOIN
+ `tc-da-1.olist_db.olist_products_dataset` products
+ON
+ items.product_id = products.product_id
+ JOIN
+ `tc-da-1.olist_db.product_category_name_translation` translations
+ON
+ products.product_category_name = translations.string_field_0
+ WHERE (seller.seller_city="itaquaquecetuba" or seller.seller_city="ibitinga") and (review_score=1 or review_score=2) 
+ Group by 1,2,3
+ Order by 4 desc
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+------------------------------------- OLIST MONTHLY REVENUE BY PRODUCT_CATEGORY_NAME
+
+
+SELECT
+ DATE(DATE_TRUNC(order_purchase_timestamp, month)) AS purchase_month,
+ string_field_1 AS product_category_name,
+ SUM(price + freight_value) AS revenue
+FROM
+`tc-da-1.olist_db.olist_orders_dataset`
+JOIN
+ `tc-da-1.olist_db.olist_order_items_dataset` items
+using(order_id)
+ JOIN
+ `tc-da-1.olist_db.olist_products_dataset` products
+ON
+ items.product_id = products.product_id
+INNER JOIN
+ `tc-da-1.olist_db.product_category_name_translation` translations
+ON
+ products.product_category_name = translations.string_field_0
+GROUP BY 1,2
+ORDER BY 1
+
+
+
+
+
+
+
+
+
+
+
+
+------------------ OLIST MONTHLY REVENUE BY PRODUCT_CATEGORY_NAME IN 10 MOST PROFITABLE CITIES
+
+
+SELECT
+ DATE(DATE_TRUNC(order_purchase_timestamp, month)) AS purchase_month,
+ string_field_1 AS product_category_name,
+ Seller_city,
+ SUM(price + freight_value) AS revenue
+FROM
+`tc-da-1.olist_db.olist_orders_dataset`
+JOIN
+ `tc-da-1.olist_db.olist_order_items_dataset` 
+using(order_id)
+JOIN `olist_db.olist_sellers_dataset`
+Using(seller_id)
+ JOIN
+ `tc-da-1.olist_db.olist_products_dataset` products
+USING(product_id)
+ JOIN
+ `tc-da-1.olist_db.product_category_name_translation` translations
+ON
+ products.product_category_name = translations.string_field_0
+ Where seller_city in ('sao paulo','ibitinga','curitiba','rio de janeiro','guarulhos','ribeirao preto','itaquaquecetuba','santo andre','belo horizonte','guariba')
+GROUP BY 1,2,3
+ORDER BY 1
